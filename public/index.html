@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Remote Terminal</title>
+  <link rel="stylesheet" href="/xterm/css/xterm.css">
+  <style>
+    :root {
+      --toolbar-bg: #1e1e2e;
+      --toolbar-btn: #313244;
+      --toolbar-btn-active: #585b70;
+      --toolbar-text: #cdd6f4;
+      --toolbar-accent: #89b4fa;
+      --toolbar-height: 44px;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      height: 100%;
+      width: 100%;
+      overflow: hidden;
+      background: #1e1e2e;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    /* 狀態列 */
+    #status-bar {
+      height: 28px;
+      background: var(--toolbar-bg);
+      color: var(--toolbar-text);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      font-size: 12px;
+      border-bottom: 1px solid #313244;
+    }
+    #status-bar .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #a6e3a1;
+      margin-right: 6px;
+      display: inline-block;
+    }
+    #status-bar.disconnected .status-dot { background: #f38ba8; }
+
+    /* 終端區域 */
+    #terminal-container {
+      position: absolute;
+      top: 28px;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      padding: 4px;
+    }
+    #terminal-container.has-toolbar {
+      bottom: calc(var(--toolbar-height) * 2 + 6px);
+    }
+
+    /* 快捷鍵工具列 */
+    #toolbar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--toolbar-bg);
+      border-top: 1px solid #313244;
+      padding: 3px 4px;
+      display: none;
+      flex-direction: column;
+      gap: 3px;
+      z-index: 100;
+    }
+    #toolbar.visible { display: flex; }
+
+    .toolbar-row {
+      display: flex;
+      gap: 4px;
+      justify-content: center;
+    }
+
+    .toolbar-btn {
+      background: var(--toolbar-btn);
+      color: var(--toolbar-text);
+      border: 1px solid #45475a;
+      border-radius: 6px;
+      padding: 8px 6px;
+      font-size: 13px;
+      font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+      cursor: pointer;
+      flex: 1;
+      max-width: 72px;
+      text-align: center;
+      touch-action: manipulation;
+      user-select: none;
+      -webkit-user-select: none;
+      transition: background 0.1s;
+      white-space: nowrap;
+    }
+    .toolbar-btn:active {
+      background: var(--toolbar-btn-active);
+      transform: scale(0.95);
+    }
+    .toolbar-btn.modifier {
+      background: #45475a;
+      color: var(--toolbar-accent);
+      font-weight: 600;
+    }
+    .toolbar-btn.modifier.active {
+      background: var(--toolbar-accent);
+      color: #1e1e2e;
+    }
+    .toolbar-btn.wide { max-width: 96px; }
+
+    /* 行動裝置鍵盤開啟時的toggle按鈕 */
+    #toolbar-toggle {
+      position: fixed;
+      bottom: 8px;
+      right: 8px;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--toolbar-accent);
+      color: #1e1e2e;
+      border: none;
+      font-size: 20px;
+      cursor: pointer;
+      z-index: 200;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      touch-action: manipulation;
+    }
+
+    /* 針對觸控裝置顯示工具列 */
+    @media (hover: none) and (pointer: coarse) {
+      #toolbar { display: flex; }
+      #toolbar-toggle { display: flex; }
+      #terminal-container { bottom: calc(var(--toolbar-height) * 2 + 6px); }
+    }
+
+    /* 重連提示 */
+    #reconnect-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 300;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 16px;
+    }
+    #reconnect-overlay.visible { display: flex; }
+    #reconnect-overlay button {
+      padding: 12px 32px;
+      font-size: 16px;
+      border-radius: 8px;
+      border: none;
+      background: var(--toolbar-accent);
+      color: #1e1e2e;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    #reconnect-overlay p {
+      color: var(--toolbar-text);
+      font-size: 18px;
+    }
+  </style>
+</head>
+<body>
+  <!-- 狀態列 -->
+  <div id="status-bar">
+    <span><span class="status-dot"></span><span id="status-text">連線中...</span></span>
+    <span id="size-info"></span>
+  </div>
+
+  <!-- 終端 -->
+  <div id="terminal-container"></div>
+
+  <!-- 快捷鍵工具列 -->
+  <div id="toolbar">
+    <!-- 第一行：修飾鍵 + 常用快捷 -->
+    <div class="toolbar-row">
+      <button class="toolbar-btn modifier" data-modifier="ctrl" id="btn-ctrl">Ctrl</button>
+      <button class="toolbar-btn modifier" data-modifier="alt" id="btn-alt">Alt</button>
+      <button class="toolbar-btn wide" data-key="Tab" data-seq="\t">Tab</button>
+      <button class="toolbar-btn" data-key="Esc" data-seq="\x1b">Esc</button>
+      <button class="toolbar-btn" data-key="↑" data-seq="\x1b[A">↑</button>
+      <button class="toolbar-btn" data-key="↓" data-seq="\x1b[B">↓</button>
+    </div>
+    <!-- 第二行：常用組合鍵 -->
+    <div class="toolbar-row">
+      <button class="toolbar-btn" data-key="Ctrl+C" data-seq="\x03">^C</button>
+      <button class="toolbar-btn" data-key="Ctrl+D" data-seq="\x04">^D</button>
+      <button class="toolbar-btn" data-key="Ctrl+Z" data-seq="\x1a">^Z</button>
+      <button class="toolbar-btn" data-key="Ctrl+L" data-seq="\x0c">^L</button>
+      <button class="toolbar-btn" data-key="←" data-seq="\x1b[D">←</button>
+      <button class="toolbar-btn" data-key="→" data-seq="\x1b[C">→</button>
+    </div>
+  </div>
+
+  <!-- 工具列切換按鈕 -->
+  <button id="toolbar-toggle" title="切換快捷鍵工具列">⌨</button>
+
+  <!-- 重連提示 -->
+  <div id="reconnect-overlay">
+    <p>連線已斷開</p>
+    <button onclick="location.reload()">重新連線</button>
+  </div>
+
+  <script src="/xterm/lib/xterm.js"></script>
+  <script src="/xterm-addon-fit/lib/addon-fit.js"></script>
+  <script src="/xterm-addon-web-links/lib/addon-web-links.js"></script>
+  <script>
+    // ========== 終端初始化 ==========
+    const term = new Terminal({
+      cursorBlink: true,
+      cursorStyle: 'bar',
+      fontSize: isMobile() ? 14 : 15,
+      fontFamily: "'SF Mono', 'Menlo', 'Consolas', 'Liberation Mono', monospace",
+      theme: {
+        background: '#1e1e2e',
+        foreground: '#cdd6f4',
+        cursor: '#f5e0dc',
+        selectionBackground: '#585b7066',
+        black: '#45475a', red: '#f38ba8', green: '#a6e3a1', yellow: '#f9e2af',
+        blue: '#89b4fa', magenta: '#f5c2e7', cyan: '#94e2d5', white: '#bac2de',
+        brightBlack: '#585b70', brightRed: '#f38ba8', brightGreen: '#a6e3a1',
+        brightYellow: '#f9e2af', brightBlue: '#89b4fa', brightMagenta: '#f5c2e7',
+        brightCyan: '#94e2d5', brightWhite: '#a6adc8',
+      },
+      allowProposedApi: true,
+      scrollback: 5000,
+    });
+
+    const fitAddon = new FitAddon.FitAddon();
+    const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+    term.loadAddon(fitAddon);
+    term.loadAddon(webLinksAddon);
+    term.open(document.getElementById('terminal-container'));
+
+    function isMobile() {
+      return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
+        (navigator.maxTouchPoints > 1);
+    }
+
+    // ========== WebSocket 連線 ==========
+    let ws;
+    let modifiers = { ctrl: false, alt: false };
+
+    function connect() {
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${protocol}//${location.host}`);
+
+      ws.onopen = () => {
+        document.getElementById('status-text').textContent = '已連線';
+        document.getElementById('status-bar').classList.remove('disconnected');
+        document.getElementById('reconnect-overlay').classList.remove('visible');
+        fitTerminal();
+      };
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'output') {
+          term.write(msg.data);
+        } else if (msg.type === 'exit') {
+          term.write('\r\n\x1b[33m[程序已結束]\x1b[0m\r\n');
+          document.getElementById('reconnect-overlay').classList.add('visible');
+        }
+      };
+
+      ws.onclose = () => {
+        document.getElementById('status-text').textContent = '已斷線';
+        document.getElementById('status-bar').classList.add('disconnected');
+        document.getElementById('reconnect-overlay').classList.add('visible');
+      };
+
+      ws.onerror = () => {
+        document.getElementById('status-text').textContent = '連線錯誤';
+        document.getElementById('status-bar').classList.add('disconnected');
+      };
+    }
+
+    function send(data) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'input', data }));
+      }
+    }
+
+    function sendResize(cols, rows) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+      }
+    }
+
+    // ========== 鍵盤輸入 ==========
+    term.onData((data) => {
+      // 如果有修飾鍵被按住，轉換字元
+      if (modifiers.ctrl && data.length === 1) {
+        const code = data.toUpperCase().charCodeAt(0);
+        if (code >= 65 && code <= 90) { // A-Z
+          send(String.fromCharCode(code - 64));
+          resetModifiers();
+          return;
+        }
+      }
+      if (modifiers.alt && data.length === 1) {
+        send('\x1b' + data);
+        resetModifiers();
+        return;
+      }
+      send(data);
+    });
+
+    // ========== 快捷鍵工具列 ==========
+    function resetModifiers() {
+      modifiers.ctrl = false;
+      modifiers.alt = false;
+      document.getElementById('btn-ctrl').classList.remove('active');
+      document.getElementById('btn-alt').classList.remove('active');
+    }
+
+    // 修飾鍵切換
+    document.querySelectorAll('.toolbar-btn.modifier').forEach(btn => {
+      btn.addEventListener('touchstart', (e) => { e.preventDefault(); }, { passive: false });
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const mod = btn.dataset.modifier;
+        modifiers[mod] = !modifiers[mod];
+        btn.classList.toggle('active', modifiers[mod]);
+        term.focus();
+      });
+    });
+
+    // 快捷鍵按鈕
+    document.querySelectorAll('.toolbar-btn:not(.modifier)').forEach(btn => {
+      btn.addEventListener('touchstart', (e) => { e.preventDefault(); }, { passive: false });
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const seq = btn.dataset.seq;
+        if (seq) {
+          // 解析轉義序列
+          const data = seq.replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) =>
+            String.fromCharCode(parseInt(hex, 16))
+          ).replace(/\\t/g, '\t').replace(/\\n/g, '\n').replace(/\\r/g, '\r');
+          send(data);
+        }
+        resetModifiers();
+        term.focus();
+      });
+    });
+
+    // 工具列顯示切換
+    const toolbar = document.getElementById('toolbar');
+    const toggleBtn = document.getElementById('toolbar-toggle');
+    const container = document.getElementById('terminal-container');
+    let toolbarVisible = isMobile();
+
+    toggleBtn.addEventListener('click', () => {
+      toolbarVisible = !toolbarVisible;
+      toolbar.classList.toggle('visible', toolbarVisible);
+      container.classList.toggle('has-toolbar', toolbarVisible);
+      fitTerminal();
+    });
+
+    if (isMobile()) {
+      toolbar.classList.add('visible');
+      container.classList.add('has-toolbar');
+    }
+
+    // ========== 視窗調整 ==========
+    function fitTerminal() {
+      try {
+        fitAddon.fit();
+        const dims = { cols: term.cols, rows: term.rows };
+        document.getElementById('size-info').textContent = `${dims.cols}×${dims.rows}`;
+        sendResize(dims.cols, dims.rows);
+      } catch (e) {}
+    }
+
+    window.addEventListener('resize', () => {
+      clearTimeout(window._fitTimeout);
+      window._fitTimeout = setTimeout(fitTerminal, 150);
+    });
+
+    // 處理 iOS Safari 地址欄和鍵盤變化
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', () => {
+        clearTimeout(window._fitTimeout);
+        window._fitTimeout = setTimeout(fitTerminal, 150);
+      });
+    }
+
+    // ========== 手機觸控：點擊終端區域彈出鍵盤 ==========
+    document.getElementById('terminal-container').addEventListener('touchstart', () => {
+      term.focus();
+    });
+
+    // ========== 啟動 ==========
+    connect();
+    setTimeout(fitTerminal, 100);
+    term.focus();
+  </script>
+</body>
+</html>

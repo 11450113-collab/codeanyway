@@ -1,0 +1,17 @@
+{
+  "name": "remote-terminal",
+  "version": "1.0.0",
+  "description": "行動裝置友善的遠端 Web 終端",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "ws": "^8.18.0",
+    "node-pty": "^1.0.0",
+    "@xterm/xterm": "^5.5.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-web-links": "^0.11.0"
+  }
+}
