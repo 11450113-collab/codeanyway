@@ -253,32 +253,55 @@
     // ========== WebSocket 連線 ==========
     let ws;
     let modifiers = { ctrl: false, alt: false };
+    let reconnectAttempts = 0;
+    let pingInterval;
 
     function connect() {
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       ws = new WebSocket(`${protocol}//${location.host}`);
 
       ws.onopen = () => {
+        reconnectAttempts = 0;
         document.getElementById('status-text').textContent = '已連線';
         document.getElementById('status-bar').classList.remove('disconnected');
         document.getElementById('reconnect-overlay').classList.remove('visible');
         fitTerminal();
+
+        // 心跳保持連線（防止 HF Spaces 和代理超時）
+        clearInterval(pingInterval);
+        pingInterval = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, 20000);
       };
 
       ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
         if (msg.type === 'output') {
           term.write(msg.data);
-        } else if (msg.type === 'exit') {
-          term.write('\r\n\x1b[33m[程序已結束]\x1b[0m\r\n');
-          document.getElementById('reconnect-overlay').classList.add('visible');
+        } else if (msg.type === 'pong') {
+          // 心跳回應，連線正常
         }
       };
 
       ws.onclose = () => {
-        document.getElementById('status-text').textContent = '已斷線';
+        clearInterval(pingInterval);
         document.getElementById('status-bar').classList.add('disconnected');
-        document.getElementById('reconnect-overlay').classList.add('visible');
+
+        // 自動重連（指數退避，最多 10 秒）
+        const delay = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 10000);
+        reconnectAttempts++;
+        document.getElementById('status-text').textContent = `重連中... (${Math.round(delay/1000)}s)`;
+
+        setTimeout(() => {
+          if (reconnectAttempts <= 50) {
+            connect();
+          } else {
+            document.getElementById('status-text').textContent = '連線失敗';
+            document.getElementById('reconnect-overlay').classList.add('visible');
+          }
+        }, delay);
       };
 
       ws.onerror = () => {

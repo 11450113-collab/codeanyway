@@ -1,23 +1,17 @@
 #!/bin/bash
 
-# 啟動 SSH 服務 (背景執行)
-/usr/sbin/sshd
+# 確保 HOME 目錄正確
+export HOME=/home/remoteuser
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
 
 echo "============================================"
 echo "  遠端終端已啟動"
 echo "============================================"
-echo ""
-echo "  Web 終端 (手機/平板/電腦瀏覽器):"
-echo "    http://localhost:8080"
-echo ""
-echo "  SSH 連線 (電腦):"
-echo "    ssh -p 2222 remoteuser@localhost"
-echo ""
-echo "  帳號: remoteuser / password123"
-echo ""
-echo "  手機快捷鍵工具列："
-echo "    Ctrl, Alt, Tab, Esc, 方向鍵"
-echo "    ^C, ^D, ^Z, ^L"
+echo "  埠號: ${PORT:-7860}"
+echo "  用戶: $(whoami)"
+echo "  HOME: $HOME"
+echo "  系統: $(uname -srm)"
 echo "============================================"
 
 # 啟動 Node.js Web 終端
